@@ -1,0 +1,20 @@
+# Enforce LF line endings for files that MUST be LF on Linux runners.
+# Without this, a Windows checkout with core.autocrlf=true could ship CRLF
+# into the repo and break shell scripts / Docker builds on CI.
+
+*           text=auto eol=lf
+
+# Explicit LF for everything we actually run on Linux
+*.sh        text eol=lf
+Dockerfile* text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.js        text eol=lf
+*.ts        text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+
+# Binary
+*.gguf      binary
+*.png       binary
+*.jpg       binary

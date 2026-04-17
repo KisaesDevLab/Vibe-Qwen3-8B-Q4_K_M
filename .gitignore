@@ -1,0 +1,30 @@
+# Downloaded model weights (several GB each — never commit)
+models/
+*.gguf
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker / build
+*.log
+.cache/
+
+# Compiled TS (we ship .ts as source; nobody should commit built output)
+integration/*.js
+integration/*.d.ts
+integration/*.js.map

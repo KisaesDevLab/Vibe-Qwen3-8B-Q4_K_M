@@ -16,15 +16,19 @@
 #   sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
 #   vulkaninfo --summary   # verify an AMD device is listed
 #
-# Build:
-#   docker build -t kisaesdevlab/llama-vibe:vulkan -f Dockerfile.vulkan .
+# Build locally:
+#   docker build -t ghcr.io/kisaesdevlab/llama-vibe:vulkan-latest \
+#     -f Dockerfile.vulkan .
+#
+# Or pull the CI-built image (published by .github/workflows/docker.yml):
+#   docker pull ghcr.io/kisaesdevlab/llama-vibe:vulkan-latest
 #
 # Run (pass the DRI device through):
 #   docker run --rm -p 8080:8080 \
 #     --device /dev/dri:/dev/dri \
 #     --group-add video \
 #     --name vibe-llm \
-#     kisaesdevlab/llama-vibe:vulkan
+#     ghcr.io/kisaesdevlab/llama-vibe:vulkan-latest
 # -----------------------------------------------------------------------------
 
 FROM debian:bookworm-slim AS model-fetch
@@ -51,7 +55,10 @@ RUN if [ -n "${MODEL_SHA256}" ]; then \
 # ---- Vulkan-enabled runtime ------------------------------------------------
 FROM ghcr.io/ggml-org/llama.cpp:server-vulkan AS runtime
 
-COPY --from=model-fetch /models/Qwen_Qwen3-8B-Q4_K_M.gguf /models/model.gguf
+# Re-declare MODEL_FILE so --build-arg flows into the COPY below.
+ARG MODEL_FILE=Qwen_Qwen3-8B-Q4_K_M.gguf
+
+COPY --from=model-fetch /models/${MODEL_FILE} /models/model.gguf
 
 ENV LLAMA_ARG_MODEL=/models/model.gguf \
     LLAMA_ARG_HOST=0.0.0.0 \
@@ -80,4 +87,4 @@ ENV LLAMA_ARG_MODEL=/models/model.gguf \
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
-  CMD ["/app/llama-server", "--version"] || exit 1
+  CMD ["/app/llama-server", "--version"]

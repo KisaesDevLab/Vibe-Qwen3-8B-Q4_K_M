@@ -1,0 +1,112 @@
+# ----------------------------------------------------------------------------
+# Build + publish llama-vibe-appliance images to GitHub Container Registry.
+#
+# Triggers:
+#   - push to main            → publishes :cpu-latest / :vulkan-latest
+#   - push of a v* tag        → publishes :cpu-<version> / :vulkan-<version>
+#   - pull_request            → builds both variants, does NOT push
+#   - workflow_dispatch       → manual run from the Actions tab
+#
+# Images:
+#   ghcr.io/<owner>/llama-vibe:cpu-<tag>
+#   ghcr.io/<owner>/llama-vibe:vulkan-<tag>
+#
+# NOTE: each image bakes in the ~4.9 GB Qwen3-8B GGUF, so build and push are
+# slow. Docker layer cache (type=gha) avoids re-downloading the model on
+# cache hits.
+# ----------------------------------------------------------------------------
+
+name: docker
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/llama-vibe
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cpu
+            dockerfile: Dockerfile
+          - variant: vulkan
+            dockerfile: Dockerfile.vulkan
+
+    steps:
+      # The model download + copy pushes us past the default runner disk budget.
+      # This action reclaims ~25 GB by removing the preinstalled Android SDK,
+      # .NET, Haskell, CodeQL, and similar tooling we don't need.
+      - name: Free disk space on runner
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Lowercase image name
+        id: img
+        run: echo "name=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}
+          # Every tag is prefixed with the variant so cpu and vulkan never
+          # collide on the same registry tag.
+          flavor: |
+            prefix=${{ matrix.variant }}-,onlatest=true
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push (${{ matrix.variant }})
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+          provenance: false

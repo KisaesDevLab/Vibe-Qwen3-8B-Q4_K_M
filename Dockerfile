@@ -5,11 +5,15 @@
 # The GGUF is baked into the image so the appliance has zero external deps
 # at runtime — matches the NucBox M6 distribution model for Vibe TB / MyBooks.
 #
-# Build:
-#   docker build -t kisaesdevlab/llama-vibe:cpu -f Dockerfile .
+# Build locally:
+#   docker build -t ghcr.io/kisaesdevlab/llama-vibe:cpu-latest -f Dockerfile .
+#
+# Or pull the CI-built image (published by .github/workflows/docker.yml):
+#   docker pull ghcr.io/kisaesdevlab/llama-vibe:cpu-latest
 #
 # Run:
-#   docker run --rm -p 8080:8080 --name vibe-llm kisaesdevlab/llama-vibe:cpu
+#   docker run --rm -p 8080:8080 --name vibe-llm \
+#     ghcr.io/kisaesdevlab/llama-vibe:cpu-latest
 #
 # Pin to a specific llama.cpp release if you want reproducible behavior.
 # See https://github.com/ggml-org/llama.cpp/pkgs/container/llama.cpp for tags.
@@ -47,8 +51,12 @@ RUN if [ -n "${MODEL_SHA256}" ]; then \
 # on the NucBox M6 / M6 Ultra Radeon 660M / 760M.
 FROM ghcr.io/ggml-org/llama.cpp:server AS runtime
 
+# Re-declare MODEL_FILE in the runtime stage so a --build-arg override
+# flows through to the COPY below (ARGs don't cross stage boundaries).
+ARG MODEL_FILE=Qwen_Qwen3-8B-Q4_K_M.gguf
+
 # Model lives inside the image so the appliance is self-contained.
-COPY --from=model-fetch /models/Qwen_Qwen3-8B-Q4_K_M.gguf /models/model.gguf
+COPY --from=model-fetch /models/${MODEL_FILE} /models/model.gguf
 
 # --- Tunable server args (override with env on `docker run -e ...`) ----------
 # See: https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md
@@ -101,9 +109,11 @@ ENV LLAMA_ARG_MODEL=/models/model.gguf \
 
 EXPOSE 8080
 
-# Healthcheck hits llama-server's /health endpoint (returns 200 once model loaded).
+# Healthcheck — the exec-form CMD exits non-zero on its own if the binary is
+# missing or unlaunchable, so we don't tack on `|| exit 1` (which would be
+# ignored anyway when mixed with JSON exec form).
 HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
-  CMD ["/app/llama-server", "--version"] || exit 1
+  CMD ["/app/llama-server", "--version"]
 
 # The base image's entrypoint is already `/app/llama-server`, and it reads every
 # LLAMA_ARG_* env var. No CMD override needed.
