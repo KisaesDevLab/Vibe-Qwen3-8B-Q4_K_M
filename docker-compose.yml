@@ -57,12 +57,14 @@ services:
       retries: 3
 
   # --- Production appliance: model baked in, CPU inference -------------------
+  # `compose up` will pull this image from GHCR if it exists, else build locally.
+  # Published by .github/workflows/docker.yml on every push to main.
   llama-appliance:
     profiles: ["appliance"]
     build:
       context: .
       dockerfile: Dockerfile
-    image: kisaesdevlab/llama-vibe:cpu
+    image: ghcr.io/kisaesdevlab/llama-vibe:cpu-latest
     container_name: vibe-llm
     restart: unless-stopped
     ports:
@@ -86,7 +88,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.vulkan
-    image: kisaesdevlab/llama-vibe:vulkan
+    image: ghcr.io/kisaesdevlab/llama-vibe:vulkan-latest
     container_name: vibe-llm
     restart: unless-stopped
     ports:
