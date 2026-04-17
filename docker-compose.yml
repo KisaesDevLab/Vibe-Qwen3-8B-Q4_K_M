@@ -1,0 +1,108 @@
+# ----------------------------------------------------------------------------
+# llama-vibe-appliance — compose definitions
+#
+# Three profiles so you can pick the right one for the situation:
+#
+#   dev        Volume-mounts ./models, pulls stock llama.cpp image. Fast to
+#              iterate on, no image rebuild when you swap models.
+#              Run:  docker compose --profile dev up
+#
+#   appliance  Built image with Qwen3-8B baked in. CPU only. This is what
+#              ships to CPA firms on the NucBox M6.
+#              Run:  docker compose --profile appliance up
+#
+#   vulkan     Same as appliance but uses the AMD iGPU via Vulkan. Faster
+#              prompt processing; requires /dev/dri passthrough.
+#              Run:  docker compose --profile vulkan up
+#
+# All three expose an OpenAI-compatible API at http://localhost:8080/v1
+# (chat/completions, completions, embeddings-if-enabled, models).
+# ----------------------------------------------------------------------------
+
+services:
+
+  # --- Development: bring-your-own-model, stock upstream image ---------------
+  llama-dev:
+    profiles: ["dev"]
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: vibe-llm-dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/models:ro
+    environment:
+      LLAMA_ARG_MODEL: /models/Qwen_Qwen3-8B-Q4_K_M.gguf
+      LLAMA_ARG_HOST: 0.0.0.0
+      LLAMA_ARG_PORT: "8080"
+      LLAMA_ARG_CTX_SIZE: "16384"
+      LLAMA_ARG_FLASH_ATTN: "on"
+      LLAMA_ARG_N_PARALLEL: "2"
+      LLAMA_ARG_CONT_BATCHING: "1"
+      LLAMA_ARG_CACHE_TYPE_K: q8_0
+      LLAMA_ARG_CACHE_TYPE_V: q8_0
+      LLAMA_ARG_THREADS: "6"
+      LLAMA_ARG_JINJA: "1"
+      LLAMA_ARG_REASONING_FORMAT: deepseek
+      LLAMA_ARG_TEMP: "0.7"
+      LLAMA_ARG_TOP_K: "20"
+      LLAMA_ARG_TOP_P: "0.8"
+      LLAMA_ARG_MIN_P: "0.0"
+      LLAMA_ARG_ALIAS: qwen3-8b-vibe
+    healthcheck:
+      test: ["CMD", "/app/llama-server", "--version"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+
+  # --- Production appliance: model baked in, CPU inference -------------------
+  llama-appliance:
+    profiles: ["appliance"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kisaesdevlab/llama-vibe:cpu
+    container_name: vibe-llm
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          # 10 GB headroom: ~5 GB weights + ~3 GB KV cache at 16K ctx + slack.
+          # Bump if you raise CTX_SIZE or N_PARALLEL.
+          memory: 10g
+    healthcheck:
+      test: ["CMD", "/app/llama-server", "--version"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+
+  # --- Production appliance: model baked in, Vulkan iGPU accelerated --------
+  llama-appliance-vulkan:
+    profiles: ["vulkan"]
+    build:
+      context: .
+      dockerfile: Dockerfile.vulkan
+    image: kisaesdevlab/llama-vibe:vulkan
+    container_name: vibe-llm
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    devices:
+      # AMD iGPU passthrough. Host needs mesa-vulkan-drivers.
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+    deploy:
+      resources:
+        limits:
+          memory: 10g
+    healthcheck:
+      test: ["CMD", "/app/llama-server", "--version"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3

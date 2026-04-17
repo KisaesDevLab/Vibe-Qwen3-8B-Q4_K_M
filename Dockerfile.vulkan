@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1.7
+# -----------------------------------------------------------------------------
+# llama-vibe-appliance (Vulkan — AMD iGPU accelerated)
+# Identical to Dockerfile except it uses llama.cpp compiled with Vulkan.
+#
+# Why Vulkan and not ROCm:
+#   - The NucBox M6 iGPUs (Radeon 660M RDNA2, 760M RDNA3) have ROCm support
+#     that is fragile and version-sensitive. Vulkan is broadly supported out
+#     of the box on Linux hosts with Mesa >= 23, requires no kernel drivers
+#     beyond what ships with Ubuntu Server 24.04 LTS, and llama.cpp's Vulkan
+#     backend has matured considerably.
+#   - Expect ~2-3x prompt processing speedup vs pure CPU. Token generation
+#     is still memory-bandwidth bound so gains there are smaller but real.
+#
+# Host prerequisites (Ubuntu Server 24.04 LTS on the NucBox M6):
+#   sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+#   vulkaninfo --summary   # verify an AMD device is listed
+#
+# Build:
+#   docker build -t kisaesdevlab/llama-vibe:vulkan -f Dockerfile.vulkan .
+#
+# Run (pass the DRI device through):
+#   docker run --rm -p 8080:8080 \
+#     --device /dev/dri:/dev/dri \
+#     --group-add video \
+#     --name vibe-llm \
+#     kisaesdevlab/llama-vibe:vulkan
+# -----------------------------------------------------------------------------
+
+FROM debian:bookworm-slim AS model-fetch
+
+ARG MODEL_REPO=bartowski/Qwen_Qwen3-8B-GGUF
+ARG MODEL_FILE=Qwen_Qwen3-8B-Q4_K_M.gguf
+ARG MODEL_SHA256=""
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /models
+
+RUN --mount=type=cache,target=/root/.cache \
+    curl -fL --retry 5 --retry-delay 2 \
+      -o "${MODEL_FILE}" \
+      "https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}?download=true"
+
+RUN if [ -n "${MODEL_SHA256}" ]; then \
+      echo "${MODEL_SHA256}  ${MODEL_FILE}" | sha256sum -c - ; \
+    fi
+
+# ---- Vulkan-enabled runtime ------------------------------------------------
+FROM ghcr.io/ggml-org/llama.cpp:server-vulkan AS runtime
+
+COPY --from=model-fetch /models/Qwen_Qwen3-8B-Q4_K_M.gguf /models/model.gguf
+
+ENV LLAMA_ARG_MODEL=/models/model.gguf \
+    LLAMA_ARG_HOST=0.0.0.0 \
+    LLAMA_ARG_PORT=8080 \
+    LLAMA_ARG_CTX_SIZE=16384 \
+    LLAMA_ARG_FLASH_ATTN=on \
+    LLAMA_ARG_N_PARALLEL=2 \
+    LLAMA_ARG_CONT_BATCHING=1 \
+    LLAMA_ARG_CACHE_TYPE_K=q8_0 \
+    LLAMA_ARG_CACHE_TYPE_V=q8_0 \
+    LLAMA_ARG_THREADS=6 \
+    LLAMA_ARG_JINJA=1 \
+    LLAMA_ARG_REASONING_FORMAT=deepseek \
+    LLAMA_ARG_TEMP=0.7 \
+    LLAMA_ARG_TOP_K=20 \
+    LLAMA_ARG_TOP_P=0.8 \
+    LLAMA_ARG_MIN_P=0.0 \
+    LLAMA_ARG_ALIAS=qwen3-8b-vibe \
+    \
+    # Offload all 36 transformer blocks to the iGPU. Qwen3-8B has 36 layers.
+    # If you see OOM or the iGPU can't hold them all (shared memory is capped
+    # by BIOS UMA frame-buffer setting — commonly 2-8 GB), lower this number;
+    # llama.cpp will keep the rest on CPU.
+    LLAMA_ARG_N_GPU_LAYERS=999
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+  CMD ["/app/llama-server", "--version"] || exit 1
